@@ -1,0 +1,7 @@
+{
+  "name": "@attestai/contracts",
+  "private": true,
+  "scripts": { "build": "hardhat compile", "test": "hardhat test" },
+  "dependencies": { "@gluwa/usc-contracts": "0.1.2" },
+  "devDependencies": { "@nomicfoundation/hardhat-ethers": "^3.0.8", "hardhat": "^2.22.18", "jsonfile": "^6.1.0" }
+}

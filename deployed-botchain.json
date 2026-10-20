@@ -1,0 +1,11 @@
+{
+  "network": "BOT Chain Testnet",
+  "chainId": 968,
+  "collateralVault": "0x31b1B13bbe6aABE678083E3525042e52172619D2",
+  "decisionRegistry": "0xb0F7D964e32287958FD5E89dEf5A13b1C2d1d066",
+  "signalEmitter": "0xD805B37516b5474d754C49052223487a09BBF263",
+  "deployer": "0x90753f69645eC1B6985EEE786721a5D10E0F5aC2",
+  "vaultTx": "0xfc67bf92bc54f1977f4d0196783ed8925eb871b501449162f7e1f96766ff5cc9",
+  "registryTx": "0xdf2e4f9c44760e747713d4175988674098e047282d54b1476432c593e1dc04b0",
+  "emitterTx": "0x57ad883f4c48d32829b4900ce30e43bbc3c012b36e6e7f4dca2e1cabc94371b3"
+}
