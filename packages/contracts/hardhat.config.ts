@@ -1,9 +1,22 @@
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-ethers";
-import { config as loadEnv } from "dotenv";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-loadEnv({ path: resolve(process.cwd(), "../../.env") });
+const envPath = resolve(process.cwd(), "../../.env");
+if (existsSync(envPath)) {
+  const content = readFileSync(envPath, "utf-8");
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx !== -1) {
+      const key = trimmed.slice(0, eqIdx).trim();
+      const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+      if (!process.env[key]) process.env[key] = val;
+    }
+  }
+}
 
 const config: HardhatUserConfig = {
   solidity: { version: "0.8.28", settings: { optimizer: { enabled: true, runs: 200 }, viaIR: true } },
