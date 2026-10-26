@@ -19,7 +19,11 @@
     "build:web": "pnpm --filter @attestai/web build",
     "vercel-build": "pnpm --filter @attestai/web build",
     "check:wallet": "node scripts/check-testnet-wallet.mjs",
-    "deploy:testnet": "pnpm --filter @attestai/contracts exec hardhat run packages/contracts/scripts/deploy-botchain.ts --network botchain_testnet",
+    "check:testnet": "node scripts/check-testnet-wallet.mjs",
+    "check:mainnet": "node scripts/check-mainnet-wallet.mjs",
+    "deploy:testnet": "pnpm --filter @attestai/contracts exec hardhat run scripts/deploy-botchain.ts --network botchain_testnet",
+    "deploy:mainnet": "pnpm --filter @attestai/contracts exec hardhat run scripts/deploy-botchain.ts --network botchain_mainnet",
+    "deploy:mainnet:standalone": "node scripts/deploy-mainnet.mjs",
     "format": "prettier --write ."
   },
   "devDependencies": { "prettier": "^3.5.3", "@noble/hashes": "1.3.2", "@typescript-eslint/parser": "^8.62.0", "@typescript-eslint/eslint-plugin": "^8.62.0", "eslint": "^9.17.0" }

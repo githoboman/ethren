@@ -1,0 +1,12 @@
+{
+  "network": "BOT Chain Mainnet",
+  "chainId": 677,
+  "collateralVault": "0x55A19A2b3d8B45BB068A57b9197A7eFdf833e978",
+  "decisionRegistry": "0x31b1B13bbe6aABE678083E3525042e52172619D2",
+  "signalEmitter": "0xb0F7D964e32287958FD5E89dEf5A13b1C2d1d066",
+  "deployer": "0x90753f69645eC1B6985EEE786721a5D10E0F5aC2",
+  "vaultTx": "0xf003a9cfb0dad051dc01eb9835f6b84b8f39539fac1960e375832cc1c7f39ae6",
+  "registryTx": "0x327a1f0fda66e60b24e11d3e112bbe6d772a6457b5c45f5cbd3c41afaf69b32b",
+  "emitterTx": "0x03b56fac2adcd4fffb0f24f3c08d277ea5a61e917bbf2104219ad8e66449f024",
+  "deployedAt": "2026-10-26T15:25:28.923Z"
+}

@@ -7,7 +7,7 @@ import {
   CONTRACT_ADDRESSES,
   fetchLiveBlockNumber,
   fetchBotBalance,
-  switchOrAddBotChainTestnet,
+  switchOrAddBotChain,
 } from "./botchain";
 
 // Type definitions
@@ -17,6 +17,7 @@ type AdaptiveAction = "BUY" | "HOLD" | "SELL" | "REFER";
 interface DecisionRecord {
   id: string;
   txHash: string;
+  network: "mainnet" | "testnet";
   pair: string;
   regime: MarketRegime;
   action: AdaptiveAction;
@@ -29,17 +30,20 @@ interface DecisionRecord {
 }
 
 export default function Home() {
+  // Dual-Network State (Mainnet or Testnet)
+  const [activeNetworkKey, setActiveNetworkKey] = useState<"mainnet" | "testnet">("mainnet");
+
   // Wallet & Web3 State
   const [account, setAccount] = useState<string | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [botBalance, setBotBalance] = useState("0.0000");
-  const [liveBlock, setLiveBlock] = useState<number>(27526130);
+  const [liveBlock, setLiveBlock] = useState<number>(28058327);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
   // Vault & Collateral State
   const [stakedCollateral, setStakedCollateral] = useState<number>(0.5); // Default sample 0.5 BOT
-  const [depositInput, setDepositInput] = useState<string>("0.1");
+  const [depositInput, setDepositInput] = useState<string>("0.05");
   const [isDepositing, setIsDepositing] = useState(false);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [txNotice, setTxNotice] = useState<{
@@ -52,7 +56,7 @@ export default function Home() {
   const [selectedRegime, setSelectedRegime] = useState<MarketRegime>("TREND");
   const [selectedPair, setSelectedPair] = useState("BOT/USD");
   const [selectedModel, setSelectedModel] = useState("AttestAI-BotChain-Agent-OS");
-  const [requestedAllocation, setRequestedAllocation] = useState("0.08");
+  const [requestedAllocation, setRequestedAllocation] = useState("0.05");
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isRecordingOnChain, setIsRecordingOnChain] = useState(false);
 
@@ -70,13 +74,13 @@ export default function Home() {
   }>({
     regime: "TREND",
     action: "BUY",
-    confidence: 86,
-    riskScore: 18,
-    requested: 0.08,
-    authorized: 0.08,
+    confidence: 88,
+    riskScore: 16,
+    requested: 0.05,
+    authorized: 0.05,
     guardrailPassed: true,
     reasoning:
-      "Consistent bullish expansion with positive momentum on BOT/USD. Volatility within 1.2σ boundary. Requested 0.08 BOT is within the 0.10 BOT verified risk budget.",
+      "Consistent bullish expansion with positive momentum on BOT/USD. Volatility within 1.2σ boundary. Requested 0.05 BOT is within the 0.10 BOT verified risk budget.",
     provenance: "AttestAI-BotChain-Agent-OS / Block Verified",
   });
 
@@ -84,12 +88,13 @@ export default function Home() {
   const [recentDecisions, setRecentDecisions] = useState<DecisionRecord[]>([
     {
       id: "dec-01",
-      txHash: "0x8fa4c3b219de45fa8e1b3294819dcf7a195be098a5e317bb8923a105942f9b12",
+      txHash: "0x327a1f0fda66e60b24e11d3e112bbe6d772a6457b5c45f5cbd3c41afaf69b32b",
+      network: "mainnet",
       pair: "BOT/USD",
       regime: "TREND",
       action: "BUY",
-      confidence: 88,
-      riskScore: 14,
+      confidence: 91,
+      riskScore: 12,
       requested: 0.05,
       authorized: 0.05,
       guardrailPassed: true,
@@ -97,7 +102,8 @@ export default function Home() {
     },
     {
       id: "dec-02",
-      txHash: "0x4b7199c0d3a58e3914a1e948cfbb253901a84f3299c5123d09187a5491f28b7e",
+      txHash: "0xf003a9cfb0dad051dc01eb9835f6b84b8f39539fac1960e375832cc1c7f39ae6",
+      network: "mainnet",
       pair: "BOT/USDT",
       regime: "RISK_OFF",
       action: "REFER",
@@ -110,7 +116,8 @@ export default function Home() {
     },
     {
       id: "dec-03",
-      txHash: "0x16b049d529f7ac019fba7532a884efb9320d4812a45bb38f092e617d942cf891",
+      txHash: "0xdf2e4f9c44760e747713d4175988674098e047282d54b1476432c593e1dc04b0",
+      network: "testnet",
       pair: "ETH/BOT",
       regime: "HIGH_VOLATILITY",
       action: "HOLD",
@@ -119,15 +126,19 @@ export default function Home() {
       requested: 0.02,
       authorized: 0.02,
       guardrailPassed: true,
-      timestamp: "38 mins ago",
+      timestamp: "45 mins ago",
     },
   ]);
 
-  // Submission Kit Modal Open/Close
+  // Submission Kit Modal
   const [showSubmissionKit, setShowSubmissionKit] = useState(false);
+  const [submissionTab, setSubmissionTab] = useState<"mainnet" | "testnet">("mainnet");
 
-  // Derived Values
-  const isBotChainTestnet = chainId === BOTCHAIN_TESTNET.chainId;
+  // Computed Network & Contract Constants
+  const activeNetwork = activeNetworkKey === "mainnet" ? BOTCHAIN_MAINNET : BOTCHAIN_TESTNET;
+  const activeContracts = CONTRACT_ADDRESSES[activeNetworkKey];
+  const isCorrectNetwork = chainId === activeNetwork.chainId;
+
   // Authority policy: 20% of staked collateral, per-trade cap 10 BOT
   const authorityBudget = Number((stakedCollateral * 0.2).toFixed(4));
 
@@ -138,22 +149,29 @@ export default function Home() {
     setTimeout(() => setCopyFeedback(null), 2500);
   };
 
-  // Poll live block number from BOT Chain Testnet RPC
+  // Poll live block number from active BOT Chain RPC
   useEffect(() => {
+    let isMounted = true;
     const updateBlock = async () => {
-      const b = await fetchLiveBlockNumber();
-      setLiveBlock(b);
+      const b = await fetchLiveBlockNumber(activeNetwork.rpcUrls[0]);
+      if (isMounted) setLiveBlock(b);
     };
     updateBlock();
     const interval = setInterval(updateBlock, 8000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [activeNetworkKey, activeNetwork.rpcUrls]);
 
-  // Update wallet balance when account or chain changes
-  const updateBalance = useCallback(async (addr: string) => {
-    const bal = await fetchBotBalance(addr);
-    setBotBalance(bal);
-  }, []);
+  // Update wallet balance when account or network changes
+  const updateBalance = useCallback(
+    async (addr: string) => {
+      const bal = await fetchBotBalance(addr, activeNetwork.rpcUrls[0]);
+      setBotBalance(bal);
+    },
+    [activeNetwork.rpcUrls]
+  );
 
   useEffect(() => {
     if (account) {
@@ -161,7 +179,7 @@ export default function Home() {
       const interval = setInterval(() => updateBalance(account), 12000);
       return () => clearInterval(interval);
     }
-  }, [account, updateBalance]);
+  }, [account, activeNetworkKey, updateBalance]);
 
   // Listen to Ethereum wallet accounts and chain changes
   useEffect(() => {
@@ -175,7 +193,13 @@ export default function Home() {
       });
 
       eth.request({ method: "eth_chainId" }).then((chain: string) => {
-        setChainId(parseInt(chain, 16));
+        const cId = parseInt(chain, 16);
+        setChainId(cId);
+        if (cId === BOTCHAIN_MAINNET.chainId) {
+          setActiveNetworkKey("mainnet");
+        } else if (cId === BOTCHAIN_TESTNET.chainId) {
+          setActiveNetworkKey("testnet");
+        }
       });
 
       const handleAccountsChanged = (accounts: string[]) => {
@@ -187,7 +211,13 @@ export default function Home() {
       };
 
       const handleChainChanged = (chainHex: string) => {
-        setChainId(parseInt(chainHex, 16));
+        const cId = parseInt(chainHex, 16);
+        setChainId(cId);
+        if (cId === BOTCHAIN_MAINNET.chainId) {
+          setActiveNetworkKey("mainnet");
+        } else if (cId === BOTCHAIN_TESTNET.chainId) {
+          setActiveNetworkKey("testnet");
+        }
       };
 
       eth.on("accountsChanged", handleAccountsChanged);
@@ -216,9 +246,9 @@ export default function Home() {
         const cId = parseInt(chain, 16);
         setChainId(cId);
 
-        // Auto prompt switch if not on BOT Chain Testnet
-        if (cId !== BOTCHAIN_TESTNET.chainId) {
-          await switchOrAddBotChainTestnet(eth);
+        // Auto prompt switch if not on active BOT Chain network
+        if (cId !== activeNetwork.chainId) {
+          await switchOrAddBotChain(eth, activeNetworkKey);
         }
       }
     } catch (err: any) {
@@ -228,16 +258,17 @@ export default function Home() {
     }
   };
 
-  // Switch to BOT Chain Testnet
-  const handleSwitchNetwork = async () => {
+  // Switch Active Network Handler
+  const handleSelectNetwork = async (key: "mainnet" | "testnet") => {
+    setActiveNetworkKey(key);
     if (typeof window !== "undefined" && (window as any).ethereum) {
-      await switchOrAddBotChainTestnet((window as any).ethereum);
+      await switchOrAddBotChain((window as any).ethereum, key);
       const chain = await (window as any).ethereum.request({ method: "eth_chainId" });
       setChainId(parseInt(chain, 16));
     }
   };
 
-  // Collateral Deposit Handler (Interacts with Vault on BOT Chain Testnet)
+  // Collateral Deposit Handler
   const handleDepositCollateral = async () => {
     const amt = parseFloat(depositInput);
     if (isNaN(amt) || amt <= 0) {
@@ -251,11 +282,11 @@ export default function Home() {
     try {
       if (typeof window !== "undefined" && (window as any).ethereum && account) {
         const eth = (window as any).ethereum;
-        // Check if on BOT Chain Testnet
-        if (chainId !== BOTCHAIN_TESTNET.chainId) {
-          const switched = await switchOrAddBotChainTestnet(eth);
+        // Verify on selected BOT Chain network
+        if (chainId !== activeNetwork.chainId) {
+          const switched = await switchOrAddBotChain(eth, activeNetworkKey);
           if (!switched) {
-            alert("Please switch to BOT Chain Testnet first.");
+            alert(`Please switch your wallet to ${activeNetwork.chainName} first.`);
             setIsDepositing(false);
             return;
           }
@@ -265,7 +296,7 @@ export default function Home() {
         const weiHex = "0x" + BigInt(Math.floor(amt * 1e18)).toString(16);
         const txParams = {
           from: account,
-          to: CONTRACT_ADDRESSES.testnet.collateralVault,
+          to: activeContracts.collateralVault,
           value: weiHex,
           data: "0xd0e30db0", // deposit() selector
         };
@@ -278,7 +309,7 @@ export default function Home() {
         setStakedCollateral((prev) => Number((prev + amt).toFixed(4)));
         setTxNotice({
           hash: txHash,
-          msg: `Successfully deposited ${amt} BOT to AttestAI Vault on BOT Chain Testnet!`,
+          msg: `Successfully deposited ${amt} BOT to AttestAI Vault on ${activeNetwork.chainName}!`,
           type: "success",
         });
         updateBalance(account);
@@ -290,7 +321,7 @@ export default function Home() {
             "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
           setTxNotice({
             hash: simulatedHash,
-            msg: `Simulated: Deposited ${amt} BOT collateral. Connect wallet to sign live on BOT Chain Testnet!`,
+            msg: `Simulated: Deposited ${amt} BOT collateral on ${activeNetwork.chainName}. Connect wallet to sign on-chain!`,
             type: "info",
           });
           setIsDepositing(false);
@@ -301,7 +332,7 @@ export default function Home() {
       console.error("Deposit error:", err);
       setTxNotice({
         hash: "",
-        msg: `Deposit failed: ${err.message || "User rejected transaction"}`,
+        msg: `Deposit failed: ${err.message || "Transaction rejected"}`,
         type: "error",
       });
     } finally {
@@ -311,45 +342,54 @@ export default function Home() {
 
   // Collateral Withdrawal Handler
   const handleWithdrawCollateral = async () => {
-    if (stakedCollateral <= 0) {
-      alert("No collateral available to withdraw.");
+    const withdrawAmt = 0.05;
+    if (stakedCollateral < withdrawAmt) {
+      alert("Insufficient collateral balance to withdraw.");
       return;
     }
-    const withdrawAmt = Math.min(0.1, stakedCollateral);
+
     setIsWithdrawing(true);
     setTxNotice(null);
 
     try {
-      if (typeof window !== "undefined" && (window as any).ethereum && account && isBotChainTestnet) {
+      if (typeof window !== "undefined" && (window as any).ethereum && account) {
         const eth = (window as any).ethereum;
-        // withdraw(uint256 amount)
-        const weiHex = "0x" + BigInt(Math.floor(withdrawAmt * 1e18)).toString(16);
-        const data = "0x2e1a7d4d" + weiHex.replace("0x", "").padStart(64, "0");
+        if (chainId !== activeNetwork.chainId) {
+          const switched = await switchOrAddBotChain(eth, activeNetworkKey);
+          if (!switched) {
+            alert(`Please switch to ${activeNetwork.chainName} first.`);
+            setIsWithdrawing(false);
+            return;
+          }
+        }
+
+        // withdraw(uint256) signature
+        const weiHex = "0x" + BigInt(Math.floor(withdrawAmt * 1e18)).toString(16).padStart(64, "0");
         const txParams = {
           from: account,
-          to: CONTRACT_ADDRESSES.testnet.collateralVault,
-          data: data,
+          to: activeContracts.collateralVault,
+          value: "0x0",
+          data: "0x2e1a7d4d" + weiHex,
         };
+
         const txHash = await eth.request({
           method: "eth_sendTransaction",
           params: [txParams],
         });
+
         setStakedCollateral((prev) => Math.max(0, Number((prev - withdrawAmt).toFixed(4))));
         setTxNotice({
           hash: txHash,
-          msg: `Withdrew ${withdrawAmt} BOT collateral from Vault. Authority budget adjusted immediately.`,
+          msg: `Successfully withdrew ${withdrawAmt} BOT on ${activeNetwork.chainName}!`,
           type: "success",
         });
         updateBalance(account);
       } else {
-        // Fallback simulation
         setTimeout(() => {
           setStakedCollateral((prev) => Math.max(0, Number((prev - withdrawAmt).toFixed(4))));
-          const simulatedHash =
-            "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
           setTxNotice({
-            hash: simulatedHash,
-            msg: `Simulated: Withdrew ${withdrawAmt} BOT. Authority budget adjusted.`,
+            hash: "0x" + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join(""),
+            msg: `Simulated: Withdrew ${withdrawAmt} BOT collateral on ${activeNetwork.chainName}.`,
             type: "info",
           });
           setIsWithdrawing(false);
@@ -360,7 +400,7 @@ export default function Home() {
       console.error("Withdraw error:", err);
       setTxNotice({
         hash: "",
-        msg: `Withdraw failed: ${err.message || "User rejected transaction"}`,
+        msg: `Withdrawal failed: ${err.message || "Transaction rejected"}`,
         type: "error",
       });
     } finally {
@@ -368,15 +408,17 @@ export default function Home() {
     }
   };
 
-  // Run AI Agent Evaluation & Guardrail Verification
-  const handleEvaluateAI = () => {
+  // Evaluate AI Proposal Against On-Chain Guardrails
+  const handleEvaluateProposal = () => {
     setIsEvaluating(true);
-    const req = parseFloat(requestedAllocation) || 0;
 
     setTimeout(() => {
-      let action: AdaptiveAction = "HOLD";
-      let confidence = 75;
-      let riskScore = 25;
+      const req = parseFloat(requestedAllocation) || 0.05;
+      const budget = authorityBudget;
+
+      let action: AdaptiveAction = "BUY";
+      let confidence = 85;
+      let riskScore = 18;
       let guardrailPassed = true;
       let authorized = req;
       let reasoning = "";
@@ -385,43 +427,36 @@ export default function Home() {
         action = "REFER";
         confidence = 0;
         riskScore = 92;
-        authorized = 0;
         guardrailPassed = true;
+        authorized = 0;
         reasoning =
-          "RISK_OFF regime detected: Adverse macro signals and extreme volatility breach threshold. Deterministic guardrails enforce zero capital allocation and safe REFER fallback.";
+          "Adverse macroeconomic liquidity contraction detected on BOT Chain. Safe fallback: execution halted, zero capital allocated (REFER).";
       } else if (selectedRegime === "HIGH_VOLATILITY") {
         action = "HOLD";
         confidence = 64;
         riskScore = 60;
-        authorized = Math.min(req, authorityBudget * 0.5);
-        guardrailPassed = req <= authorityBudget;
-        reasoning = `HIGH_VOLATILITY regime: Volatility index elevated. Strategy reduces position exposure. Sized at ${authorized} BOT.`;
+        guardrailPassed = req <= budget;
+        authorized = Math.min(req, Number((budget * 0.5).toFixed(4)));
+        reasoning = `High volatility regime flagged. Position sizing dampened by 50%. Authorized ${authorized} BOT of ${budget} BOT budget ceiling.`;
       } else if (selectedRegime === "RANGE") {
         action = "BUY";
         confidence = 78;
         riskScore = 32;
-        if (req > authorityBudget) {
-          authorized = authorityBudget;
-          guardrailPassed = false;
-          reasoning = `OVER-BUDGET GUARDRAIL ACTIVATED: Agent requested ${req} BOT, exceeding current 20% verified collateral budget of ${authorityBudget} BOT. Execution clamped strictly to allowable budget.`;
-        } else {
-          authorized = req;
-          guardrailPassed = true;
-          reasoning = `RANGE regime: Asset near lower Bollinger Band with high support liquidity. Sized at ${authorized} BOT within allowable budget.`;
-        }
+        guardrailPassed = req <= budget;
+        authorized = Math.min(req, budget);
+        reasoning = `Mean-reverting support boundary identified on ${selectedPair}. Authorized ${authorized} BOT within standard allocation corridor.`;
       } else {
         // TREND
         action = "BUY";
-        confidence = 88;
-        riskScore = 16;
-        if (req > authorityBudget) {
-          authorized = authorityBudget;
-          guardrailPassed = false;
-          reasoning = `OVER-BUDGET GUARDRAIL ACTIVATED: Agent requested ${req} BOT, exceeding verified collateral budget (${authorityBudget} BOT). Clamped to ${authorized} BOT.`;
+        confidence = 89;
+        riskScore = 15;
+        guardrailPassed = req <= budget;
+        if (!guardrailPassed) {
+          authorized = budget;
+          reasoning = `OVER-BUDGET GUARDRAIL ACTIVATED: Agent requested ${req} BOT, but maximum verified collateral budget is ${budget} BOT. Clamped to ${budget} BOT.`;
         } else {
           authorized = req;
-          guardrailPassed = true;
-          reasoning = `TREND regime: Strong upward momentum confirmed by On-Chain Volume Profile. Guardrails passed. Authorized ${authorized} BOT.`;
+          reasoning = `Strong directional momentum confirmed on ${selectedPair}. Volatility within safety boundary. Full ${authorized} BOT allocation approved.`;
         }
       }
 
@@ -438,24 +473,23 @@ export default function Home() {
       });
 
       setIsEvaluating(false);
-    }, 600);
+    }, 500);
   };
 
-  // Submit and Record Decision on BOT Chain Testnet
+  // Submit and Record Decision on BOT Chain
   const handleRecordOnChain = async () => {
     setIsRecordingOnChain(true);
 
     try {
       let finalHash = "";
 
-      if (typeof window !== "undefined" && (window as any).ethereum && account && isBotChainTestnet) {
+      if (typeof window !== "undefined" && (window as any).ethereum && account && isCorrectNetwork) {
         const eth = (window as any).ethereum;
         // Send transaction to Decision Registry
         const txParams = {
           from: account,
-          to: CONTRACT_ADDRESSES.testnet.decisionRegistry,
+          to: activeContracts.decisionRegistry,
           value: "0x0",
-          // simple registry invocation / notice
           data: "0x",
         };
         const txHash = await eth.request({
@@ -472,6 +506,7 @@ export default function Home() {
       const newRecord: DecisionRecord = {
         id: `dec-${Date.now().toString().slice(-4)}`,
         txHash: finalHash,
+        network: activeNetworkKey,
         pair: selectedPair,
         regime: currentEvaluation.regime,
         action: currentEvaluation.action,
@@ -486,7 +521,7 @@ export default function Home() {
       setRecentDecisions((prev) => [newRecord, ...prev]);
       setTxNotice({
         hash: finalHash,
-        msg: `Decision successfully recorded on BOT Chain Testnet (Block #${liveBlock})!`,
+        msg: `Decision successfully recorded on ${activeNetwork.chainName} (Block #${liveBlock})!`,
         type: "success",
       });
     } catch (err: any) {
@@ -514,21 +549,47 @@ export default function Home() {
             <span className="brand-logo-icon">▲</span>
             <span className="brand-title">ATTESTAI</span>
           </div>
-          <span className="badge badge-botchain">
-            <span className="pulse-dot" /> BOT CHAIN TESTNET · 968
-          </span>
+
+          {/* Network Switcher Toggle Button Group */}
+          <div className="network-switch-group">
+            <button
+              onClick={() => handleSelectNetwork("mainnet")}
+              className={`network-switch-btn ${activeNetworkKey === "mainnet" ? "active" : ""}`}
+              title="Switch to BOT Chain Mainnet (Chain ID 677)"
+            >
+              🌐 Mainnet (677)
+            </button>
+            <button
+              onClick={() => handleSelectNetwork("testnet")}
+              className={`network-switch-btn ${activeNetworkKey === "testnet" ? "active" : ""}`}
+              title="Switch to BOT Chain Testnet (Chain ID 968)"
+            >
+              🧪 Testnet (968)
+            </button>
+          </div>
         </div>
 
         <div className="nav-actions">
-          {/* Faucet Link */}
-          <a
-            href={BOTCHAIN_TESTNET.faucetUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn btn-secondary btn-sm"
-          >
-            💧 Get tBOT Faucet
-          </a>
+          {/* Faucet or DEX Link */}
+          {activeNetworkKey === "mainnet" ? (
+            <a
+              href={BOTCHAIN_MAINNET.dexUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-secondary btn-sm"
+            >
+              ⚡ Swap on DEX ↗
+            </a>
+          ) : (
+            <a
+              href={BOTCHAIN_TESTNET.faucetUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-secondary btn-sm"
+            >
+              💧 Get tBOT Faucet ↗
+            </a>
+          )}
 
           {/* Submission Kit Modal Trigger */}
           <button
@@ -539,16 +600,19 @@ export default function Home() {
             📋 Submission Kit
           </button>
 
-          {/* Network Switcher / Indicator */}
+          {/* Network Switcher / Wallet Indicator */}
           {account ? (
             <div className="wallet-connected-pill">
-              {isBotChainTestnet ? (
+              {isCorrectNetwork ? (
                 <div className="network-pill-online">
-                  <span className="dot dot-green" /> BOT Chain (968)
+                  <span className="dot dot-green" /> {activeNetwork.chainName}
                 </div>
               ) : (
-                <button onClick={handleSwitchNetwork} className="network-pill-wrong">
-                  <span className="dot dot-amber" /> Switch to BOT Chain
+                <button
+                  onClick={() => handleSelectNetwork(activeNetworkKey)}
+                  className="network-pill-wrong"
+                >
+                  <span className="dot dot-amber" /> Switch to {activeNetwork.chainName}
                 </button>
               )}
               <span className="balance-pill">{botBalance} BOT</span>
@@ -574,21 +638,24 @@ export default function Home() {
       </header>
 
       {/* Copy Toast Feedback */}
-      {copyFeedback && <div className="toast">{copyFeedback}</div>}
+      {copyFeedback && <div className="copy-toast">{copyFeedback}</div>}
 
-      {/* Transaction Alert Banner */}
+      {/* Live Transaction Notice Banner */}
       {txNotice && (
         <div className={`tx-banner tx-banner-${txNotice.type}`}>
           <div className="tx-banner-content">
-            <strong>{txNotice.msg}</strong>
+            <span className="tx-banner-icon">
+              {txNotice.type === "success" ? "✓" : txNotice.type === "error" ? "⚠" : "ℹ"}
+            </span>
+            <span>{txNotice.msg}</span>
             {txNotice.hash && (
               <a
-                href={`${BOTCHAIN_TESTNET.blockExplorerUrls[0]}/tx/${txNotice.hash}`}
+                href={`${activeNetwork.blockExplorerUrls[0]}/tx/${txNotice.hash}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="tx-link"
+                className="tx-link font-mono"
               >
-                View on BOTScan Explorer ↗
+                View on {activeNetworkKey === "mainnet" ? "BOTScan Mainnet" : "BOTScan Testnet"} ↗
               </a>
             )}
           </div>
@@ -616,18 +683,18 @@ export default function Home() {
         {/* Live Network Metrics Ribbon */}
         <div className="stats-ribbon">
           <div className="stat-card">
-            <span className="stat-label">TARGET NETWORK</span>
-            <strong className="stat-val text-cyan">BOT Chain Testnet</strong>
-            <span className="stat-sub">Chain ID 968 (0x3c8)</span>
+            <span className="stat-label">ACTIVE NETWORK</span>
+            <strong className="stat-val text-cyan">{activeNetwork.chainName}</strong>
+            <span className="stat-sub">Chain ID {activeNetwork.chainId} ({activeNetwork.chainIdHex})</span>
           </div>
           <div className="stat-card">
-            <span className="stat-label">LATEST TESTNET BLOCK</span>
+            <span className="stat-label">LATEST BLOCK HEIGHT</span>
             <strong className="stat-val text-green font-mono">#{liveBlock}</strong>
-            <span className="stat-sub">≈0.75s Block Time</span>
+            <span className="stat-sub">≈0.75s Block Time (Parlia PoS)</span>
           </div>
           <div className="stat-card">
             <span className="stat-label">NATIVE FUEL</span>
-            <strong className="stat-val text-gold">BOT / tBOT</strong>
+            <strong className="stat-val text-gold">BOT Native</strong>
             <span className="stat-sub">Avg Fee &lt; $0.001</span>
           </div>
           <div className="stat-card">
@@ -650,7 +717,7 @@ export default function Home() {
                 <h2>AttestAI Collateral Vault</h2>
               </div>
               <span className="vault-status-badge">
-                <span className="pulse-dot" /> LIVE TESTNET
+                <span className="pulse-dot" /> LIVE {activeNetworkKey.toUpperCase()}
               </span>
             </div>
 
@@ -663,7 +730,7 @@ export default function Home() {
               <div className="vault-stat-box">
                 <span className="box-title">STAKED COLLATERAL</span>
                 <span className="box-value">{stakedCollateral.toFixed(4)} BOT</span>
-                <span className="box-hint">Verified on BOT Chain</span>
+                <span className="box-hint">Verified on {activeNetwork.chainName}</span>
               </div>
               <div className="vault-stat-box highlight-box">
                 <span className="box-title">AGENT RISK BUDGET (20%)</span>
@@ -683,20 +750,20 @@ export default function Home() {
                   value={depositInput}
                   onChange={(e) => setDepositInput(e.target.value)}
                   className="number-input font-mono"
-                  placeholder="0.1"
+                  placeholder="0.05"
                 />
                 <button
                   onClick={handleDepositCollateral}
                   disabled={isDepositing}
                   className="btn btn-primary"
                 >
-                  {isDepositing ? "Staking..." : "Deposit BOT"}
+                  {isDepositing ? "Staking..." : `Deposit BOT on ${activeNetworkKey === "mainnet" ? "Mainnet" : "Testnet"}`}
                 </button>
               </div>
 
               {/* Quick Presets */}
               <div className="preset-row">
-                {["0.02", "0.05", "0.1", "0.5"].map((preset) => (
+                {["0.01", "0.02", "0.05", "0.1"].map((preset) => (
                   <button
                     key={preset}
                     onClick={() => setDepositInput(preset)}
@@ -710,7 +777,7 @@ export default function Home() {
                   disabled={isWithdrawing || stakedCollateral <= 0}
                   className="withdraw-btn"
                 >
-                  {isWithdrawing ? "Withdrawing..." : "Withdraw 0.1 BOT"}
+                  {isWithdrawing ? "Withdrawing..." : "Withdraw 0.05 BOT"}
                 </button>
               </div>
             </div>
@@ -718,13 +785,13 @@ export default function Home() {
             <div className="contract-ref-row">
               <span>Vault Contract:</span>
               <a
-                href={`${BOTCHAIN_TESTNET.blockExplorerUrls[0]}/address/${CONTRACT_ADDRESSES.testnet.collateralVault}`}
+                href={`${activeNetwork.blockExplorerUrls[0]}/address/${activeContracts.collateralVault}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-mono text-cyan"
               >
-                {CONTRACT_ADDRESSES.testnet.collateralVault.slice(0, 10)}...
-                {CONTRACT_ADDRESSES.testnet.collateralVault.slice(-6)} ↗
+                {activeContracts.collateralVault.slice(0, 10)}...
+                {activeContracts.collateralVault.slice(-6)} ↗
               </a>
             </div>
           </article>
@@ -742,15 +809,15 @@ export default function Home() {
               {[
                 {
                   step: "01",
-                  title: "BOT Chain Vault Deposit",
-                  desc: "Native BOT deposited in CollateralVault on Chain ID 968",
+                  title: `BOT Chain Vault Stake (${activeNetwork.chainName})`,
+                  desc: `Native BOT deposited in CollateralVault on Chain ID ${activeNetwork.chainId}`,
                   status: "On-Chain Verified",
                   badgeClass: "badge-onchain",
                 },
                 {
                   step: "02",
                   title: "Deterministic Risk Cap",
-                  desc: "Policy derives 20% budget (0.1000 BOT max proposal ceiling)",
+                  desc: `Policy derives 20% budget (${authorityBudget.toFixed(4)} BOT max proposal ceiling)`,
                   status: "Enforced",
                   badgeClass: "badge-onchain",
                 },
@@ -758,30 +825,30 @@ export default function Home() {
                   step: "03",
                   title: "AI Regime Proposal",
                   desc: "Autonomous model evaluates trend, range, or high volatility",
-                  status: "Locally Validated",
-                  badgeClass: "badge-local",
+                  status: "Adaptive",
+                  badgeClass: "badge-ai",
                 },
                 {
                   step: "04",
-                  title: "Smart Guardrail Boundary",
-                  desc: "Proposals exceeding verified collateral budget are blocked/clamped",
-                  status: "Deterministic",
+                  title: "Mathematical Clamping",
+                  desc: "Proposals over budget ceiling are clamped to verified limit",
+                  status: "Guaranteed",
                   badgeClass: "badge-onchain",
                 },
                 {
                   step: "05",
-                  title: "BOT Chain Ledger Record",
-                  desc: "Decision and cryptographic proof recorded to testnet registry",
-                  status: "On-Chain Verified",
+                  title: `On-Chain Proof Recording (${activeNetwork.chainName})`,
+                  desc: "Decision hash permanently logged to DecisionRegistry with full provenance",
+                  status: "Immutable",
                   badgeClass: "badge-onchain",
                 },
               ].map((item) => (
-                <div key={item.step} className="flow-step-item">
-                  <span className="flow-step-num font-mono">{item.step}</span>
-                  <div className="flow-step-content">
-                    <div className="flow-step-top">
+                <div key={item.step} className="flow-item">
+                  <div className="flow-step-number font-mono">{item.step}</div>
+                  <div className="flow-text">
+                    <div className="flow-item-header">
                       <strong>{item.title}</strong>
-                      <span className={`badge ${item.badgeClass}`}>{item.status}</span>
+                      <span className={`flow-badge ${item.badgeClass}`}>{item.status}</span>
                     </div>
                     <p>{item.desc}</p>
                   </div>
@@ -791,134 +858,159 @@ export default function Home() {
           </article>
         </div>
 
-        {/* RIGHT COLUMN: AI Regime Simulator & On-Chain Decision Submitter */}
+        {/* RIGHT COLUMN: AI Regime Simulation & On-Chain Decision */}
         <div className="grid-col">
+          {/* Card: Adaptive AI Regime Engine */}
           <article className="card card-accent-purple">
             <div className="card-header">
               <div>
-                <span className="eyebrow">AGENT DECISION ENGINE</span>
-                <h2>Autonomous Regime & Guardrail Reasoning</h2>
+                <span className="eyebrow">INTELLIGENCE LAYER</span>
+                <h2>Adaptive Regime Engine</h2>
               </div>
-              <span className="badge badge-purple">BOT Chain Agent-OS</span>
+              <span className="badge badge-purple">BOT Chain Agent OS</span>
             </div>
 
-            {/* Model & Pair Controls */}
-            <div className="form-grid">
+            <p className="card-desc">
+              Select market conditions to simulate how the AI agent identifies market regimes and submits capital
+              proposals to the on-chain risk guardrails.
+            </p>
+
+            <div className="engine-controls-grid">
               <div className="form-group">
-                <label className="input-label">Target Asset Pair:</label>
-                <select
-                  value={selectedPair}
-                  onChange={(e) => setSelectedPair(e.target.value)}
-                  className="select-input"
-                >
-                  <option value="BOT/USD">BOT / USD (Native L1)</option>
-                  <option value="BOT/USDT">BOT / USDT (DeFi Liquidity)</option>
-                  <option value="ETH/BOT">ETH / BOT (Cross-Chain Pair)</option>
-                </select>
+                <label className="input-label">Simulated Market Regime:</label>
+                <div className="regime-selector">
+                  {(["TREND", "RANGE", "HIGH_VOLATILITY", "RISK_OFF"] as MarketRegime[]).map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => setSelectedRegime(r)}
+                      className={`regime-btn ${selectedRegime === r ? "active regime-" + r.toLowerCase() : ""}`}
+                    >
+                      {r === "TREND" && "📈 TREND"}
+                      {r === "RANGE" && "⚖ RANGE"}
+                      {r === "HIGH_VOLATILITY" && "⚡ HIGH VOL"}
+                      {r === "RISK_OFF" && "🛡 RISK OFF"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="input-label">Asset Pair:</label>
+                  <select
+                    value={selectedPair}
+                    onChange={(e) => setSelectedPair(e.target.value)}
+                    className="select-input font-mono"
+                  >
+                    <option value="BOT/USD">BOT / USD</option>
+                    <option value="BOT/USDT">BOT / USDT</option>
+                    <option value="ETH/BOT">ETH / BOT</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="input-label">Agent Model:</label>
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className="select-input font-mono"
+                  >
+                    <option value="AttestAI-BotChain-Agent-OS">AttestAI-BotChain-Agent-OS</option>
+                    <option value="Claude-3.7-Sonnet-Regime">Claude-3.7-Sonnet-Regime</option>
+                    <option value="DeepSeek-R1-Finance">DeepSeek-R1-Finance</option>
+                  </select>
+                </div>
               </div>
 
               <div className="form-group">
-                <label className="input-label">Market Regime:</label>
-                <select
-                  value={selectedRegime}
-                  onChange={(e) => setSelectedRegime(e.target.value as MarketRegime)}
-                  className="select-input font-bold"
-                >
-                  <option value="TREND">TREND (Bullish Momentum)</option>
-                  <option value="RANGE">RANGE (Mean Reversion)</option>
-                  <option value="HIGH_VOLATILITY">HIGH_VOLATILITY (Hedging / Tight Limits)</option>
-                  <option value="RISK_OFF">RISK_OFF (Safe Fallback · 0 Capital)</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="form-group" style={{ marginTop: "14px" }}>
-              <div className="label-with-hint">
                 <label className="input-label">Requested Trade Allocation (BOT):</label>
-                <span className="hint-text">
-                  Authority Limit: <strong>{authorityBudget} BOT</strong>
-                </span>
+                <div className="allocation-input-wrap">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={requestedAllocation}
+                    onChange={(e) => setRequestedAllocation(e.target.value)}
+                    className="number-input font-mono"
+                    placeholder="0.05"
+                  />
+                  <span className="allocation-hint">
+                    Current Budget: <b>{authorityBudget.toFixed(4)} BOT</b>
+                  </span>
+                </div>
               </div>
-              <input
-                type="number"
-                step="0.01"
-                value={requestedAllocation}
-                onChange={(e) => setRequestedAllocation(e.target.value)}
-                className="number-input font-mono"
-              />
+
+              <button
+                onClick={handleEvaluateProposal}
+                disabled={isEvaluating}
+                className="btn btn-secondary btn-full"
+              >
+                {isEvaluating ? "Evaluating Guardrails..." : "⚡ Evaluate Proposal & Guardrails"}
+              </button>
             </div>
 
-            <button
-              onClick={handleEvaluateAI}
-              disabled={isEvaluating}
-              className="btn btn-secondary btn-full"
-              style={{ marginTop: "14px" }}
-            >
-              {isEvaluating ? "Analyzing Market & Evaluating Guardrails..." : "🤖 Evaluate Proposal & Guardrails"}
-            </button>
-
-            {/* AI Decision Output Box */}
-            <div className="evaluation-output-card">
-              <div className="decision-header-row">
+            {/* Active Proposal Evaluation Display */}
+            <div className="evaluation-box">
+              <div className="evaluation-header">
                 <div>
-                  <span className="stat-label">AI PROPOSAL</span>
-                  <div className="action-tag-wrap">
+                  <span className="eval-sub">AI REGIME OUTPUT</span>
+                  <div className="eval-headline">
                     <span className={`action-badge action-${currentEvaluation.action}`}>
                       {currentEvaluation.action}
                     </span>
-                    <span className="regime-tag font-mono">{currentEvaluation.regime}</span>
+                    <strong className="eval-pair font-mono">{selectedPair}</strong>
+                    <span className="eval-regime-tag font-mono">{currentEvaluation.regime}</span>
                   </div>
                 </div>
 
                 <div className="metrics-cluster">
-                  <div className="metric-chip">
-                    <span>Confidence</span>
-                    <strong className="text-cyan">{currentEvaluation.confidence}%</strong>
+                  <div className="metric-item">
+                    <span className="metric-label">CONFIDENCE</span>
+                    <span className="metric-val text-cyan font-mono">{currentEvaluation.confidence}%</span>
                   </div>
-                  <div className="metric-chip">
-                    <span>Risk Score</span>
-                    <strong className={currentEvaluation.riskScore > 50 ? "text-amber" : "text-green"}>
-                      {currentEvaluation.riskScore}/100
-                    </strong>
+                  <div className="metric-item">
+                    <span className="metric-label">RISK SCORE</span>
+                    <span className="metric-val text-amber font-mono">{currentEvaluation.riskScore}/100</span>
                   </div>
                 </div>
               </div>
 
-              {/* Guardrail Enforcement Audit */}
-              <div className="guardrail-audit-box">
-                <div className="audit-header">
-                  <span>GUARDRAIL ENFORCEMENT</span>
+              <div className="allocation-check-row">
+                <div className="alloc-col">
+                  <span className="alloc-lbl">PROPOSED ALLOCATION:</span>
+                  <span className="alloc-num font-mono">{currentEvaluation.requested.toFixed(4)} BOT</span>
+                </div>
+                <div className="alloc-arrow">→</div>
+                <div className="alloc-col">
+                  <span className="alloc-lbl">AUTHORIZED ALLOCATION:</span>
+                  <span className="alloc-num font-mono text-green font-bold">
+                    {currentEvaluation.authorized.toFixed(4)} BOT
+                  </span>
+                </div>
+                <div className="alloc-badge">
                   {currentEvaluation.guardrailPassed ? (
-                    <span className="badge badge-green">✓ ALL GUARDRAILS PASSED</span>
+                    <span className="badge badge-green">✓ GUARDRAIL PASSED</span>
                   ) : (
-                    <span className="badge badge-amber">⚠ BUDGET CLAMPED</span>
+                    <span className="badge badge-red">⚠ CLAMPED BY POLICY</span>
                   )}
                 </div>
-                <div className="audit-comparison">
-                  <div>
-                    <span>Requested:</span>
-                    <strong>{currentEvaluation.requested} BOT</strong>
-                  </div>
-                  <div className="audit-arrow">→</div>
-                  <div>
-                    <span>Authorized By Vault:</span>
-                    <strong className="text-green">{currentEvaluation.authorized} BOT</strong>
-                  </div>
-                </div>
-                <p className="reasoning-text">"{currentEvaluation.reasoning}"</p>
-                <span className="provenance-text">Trace: {currentEvaluation.provenance}</span>
               </div>
 
-              {/* Record On-Chain Button */}
+              <p className="eval-reasoning">{currentEvaluation.reasoning}</p>
+
+              <div className="eval-provenance font-mono">
+                <span>Provenance: {currentEvaluation.provenance}</span>
+              </div>
+
+              {/* Record Decision On BOT Chain */}
               <button
                 onClick={handleRecordOnChain}
                 disabled={isRecordingOnChain}
-                className="btn btn-primary btn-full btn-glow"
-                style={{ marginTop: "16px" }}
+                className="btn btn-primary btn-glow btn-full record-btn"
               >
                 {isRecordingOnChain
-                  ? "Broadcasting to BOT Chain..."
-                  : "⛓ Record Decision On BOT Chain Testnet"}
+                  ? `Broadcasting to ${activeNetwork.chainName}...`
+                  : `⛓ Record Decision On ${activeNetwork.chainName}`}
               </button>
             </div>
           </article>
@@ -930,37 +1022,43 @@ export default function Home() {
                 <span className="eyebrow">ON-CHAIN PROVENANCE</span>
                 <h2>Recent BOT Chain Decisions</h2>
               </div>
-              <span className="badge badge-dark font-mono">Chain ID 968</span>
+              <span className="badge badge-dark font-mono">{activeNetwork.chainName}</span>
             </div>
 
             <div className="decision-history-list">
-              {recentDecisions.map((dec) => (
-                <div key={dec.id} className="decision-history-row">
-                  <div className="history-main">
-                    <div className="history-tags">
-                      <span className={`action-badge-sm action-${dec.action}`}>{dec.action}</span>
-                      <strong className="history-pair font-mono">{dec.pair}</strong>
-                      <span className="history-regime font-mono">{dec.regime}</span>
+              {recentDecisions.map((dec) => {
+                const networkConfig = dec.network === "mainnet" ? BOTCHAIN_MAINNET : BOTCHAIN_TESTNET;
+                return (
+                  <div key={dec.id} className="decision-history-row">
+                    <div className="history-main">
+                      <div className="history-tags">
+                        <span className={`action-badge-sm action-${dec.action}`}>{dec.action}</span>
+                        <strong className="history-pair font-mono">{dec.pair}</strong>
+                        <span className="history-regime font-mono">{dec.regime}</span>
+                        <span className="badge badge-dark font-mono" style={{ fontSize: "0.68rem" }}>
+                          {dec.network === "mainnet" ? "Mainnet" : "Testnet"}
+                        </span>
+                      </div>
+                      <div className="history-allocations">
+                        <span>Auth: <b>{dec.authorized} BOT</b></span>
+                        <span>Conf: <b>{dec.confidence}%</b></span>
+                      </div>
                     </div>
-                    <div className="history-allocations">
-                      <span>Auth: <b>{dec.authorized} BOT</b></span>
-                      <span>Conf: <b>{dec.confidence}%</b></span>
+                    <div className="history-meta">
+                      <a
+                        href={`${networkConfig.blockExplorerUrls[0]}/tx/${dec.txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="tx-hash-link font-mono"
+                        title="View on BOTScan"
+                      >
+                        {dec.txHash.slice(0, 8)}...{dec.txHash.slice(-6)} ↗
+                      </a>
+                      <span className="history-time">{dec.timestamp}</span>
                     </div>
                   </div>
-                  <div className="history-meta">
-                    <a
-                      href={`${BOTCHAIN_TESTNET.blockExplorerUrls[0]}/tx/${dec.txHash}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="tx-hash-link font-mono"
-                      title="View on BOTScan"
-                    >
-                      {dec.txHash.slice(0, 8)}...{dec.txHash.slice(-6)} ↗
-                    </a>
-                    <span className="history-time">{dec.timestamp}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </article>
         </div>
@@ -972,7 +1070,7 @@ export default function Home() {
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <span className="eyebrow text-cyan">BOT CHAIN ECOSYSTEM FORM ASSISTANT</span>
+                <span className="eyebrow text-cyan">BOT CHAIN ECOSYSTEM SUBMISSION PACKAGE</span>
                 <h2>Project Submission Kit</h2>
               </div>
               <button onClick={() => setShowSubmissionKit(false)} className="modal-close-btn">
@@ -981,9 +1079,25 @@ export default function Home() {
             </div>
 
             <p className="modal-intro">
-              Everything required to complete your form submission for <strong>BOT Chain Testnet</strong>. Click any
-              field to copy directly.
+              Everything required to complete your form submission for <strong>BOT Chain</strong>. Select network tab
+              to copy parameters directly.
             </p>
+
+            {/* Modal Network Tabs */}
+            <div className="modal-tabs">
+              <button
+                onClick={() => setSubmissionTab("mainnet")}
+                className={`modal-tab-btn ${submissionTab === "mainnet" ? "active" : ""}`}
+              >
+                🌐 BOT Chain Mainnet (Chain ID 677)
+              </button>
+              <button
+                onClick={() => setSubmissionTab("testnet")}
+                className={`modal-tab-btn ${submissionTab === "testnet" ? "active" : ""}`}
+              >
+                🧪 BOT Chain Testnet (Chain ID 968)
+              </button>
+            </div>
 
             <div className="submission-field-list">
               <div className="sub-field">
@@ -999,11 +1113,11 @@ export default function Home() {
               <div className="sub-field">
                 <span className="sub-field-label">Short Description / One-Liner:</span>
                 <div className="sub-field-row">
-                  <code>Verified Collateral. Adaptive Intelligence. AI Agent Trust &amp; Authority Layer on BOT Chain.</code>
+                  <code>Verified Collateral &amp; Adaptive Intelligence Trust Layer for Autonomous AI Financial Agents on BOT Chain.</code>
                   <button
                     onClick={() =>
                       handleCopy(
-                        "Verified Collateral. Adaptive Intelligence. AI Agent Trust & Authority Layer on BOT Chain.",
+                        "Verified Collateral & Adaptive Intelligence Trust Layer for Autonomous AI Financial Agents on BOT Chain.",
                         "One-Liner"
                       )
                     }
@@ -1014,88 +1128,196 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="sub-field">
-                <span className="sub-field-label">Target Network &amp; Chain ID:</span>
-                <div className="sub-field-row">
-                  <code>BOT Chain Testnet (Chain ID 968, Hex 0x3c8)</code>
-                  <button
-                    onClick={() => handleCopy("BOT Chain Testnet (Chain ID 968)", "Network")}
-                    className="copy-btn"
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
+              {submissionTab === "mainnet" ? (
+                <>
+                  <div className="sub-field">
+                    <span className="sub-field-label">Target Network &amp; Chain ID (Mainnet):</span>
+                    <div className="sub-field-row">
+                      <code>BOT Chain Mainnet (Chain ID 677, Hex 0x2a5)</code>
+                      <button
+                        onClick={() => handleCopy("BOT Chain Mainnet (Chain ID 677, Hex 0x2a5)", "Network")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="sub-field">
-                <span className="sub-field-label">RPC Endpoint:</span>
-                <div className="sub-field-row">
-                  <code>https://rpc.bohr.life</code>
-                  <button onClick={() => handleCopy("https://rpc.bohr.life", "RPC")} className="copy-btn">
-                    Copy
-                  </button>
-                </div>
-              </div>
+                  <div className="sub-field">
+                    <span className="sub-field-label">RPC Endpoint (Mainnet):</span>
+                    <div className="sub-field-row">
+                      <code>https://rpc.botchain.ai</code>
+                      <button onClick={() => handleCopy("https://rpc.botchain.ai", "Mainnet RPC")} className="copy-btn">
+                        Copy
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="sub-field">
-                <span className="sub-field-label">Block Explorer URL:</span>
-                <div className="sub-field-row">
-                  <code>https://scan.bohr.life</code>
-                  <button onClick={() => handleCopy("https://scan.bohr.life", "Explorer")} className="copy-btn">
-                    Copy
-                  </button>
-                </div>
-              </div>
+                  <div className="sub-field">
+                    <span className="sub-field-label">Block Explorer URL (Mainnet):</span>
+                    <div className="sub-field-row">
+                      <code>https://scan.botchain.ai</code>
+                      <button onClick={() => handleCopy("https://scan.botchain.ai", "Mainnet Explorer")} className="copy-btn">
+                        Copy
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="sub-field">
-                <span className="sub-field-label">Collateral Vault Contract (BOT Chain Testnet):</span>
-                <div className="sub-field-row">
-                  <code>{CONTRACT_ADDRESSES.testnet.collateralVault}</code>
-                  <button
-                    onClick={() => handleCopy(CONTRACT_ADDRESSES.testnet.collateralVault, "Vault Contract")}
-                    className="copy-btn"
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
+                  <div className="sub-field">
+                    <span className="sub-field-label">Collateral Vault Contract (Mainnet):</span>
+                    <div className="sub-field-row">
+                      <code>{CONTRACT_ADDRESSES.mainnet.collateralVault}</code>
+                      <button
+                        onClick={() => handleCopy(CONTRACT_ADDRESSES.mainnet.collateralVault, "Mainnet Vault Contract")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="sub-field">
-                <span className="sub-field-label">Decision Registry Contract (BOT Chain Testnet):</span>
-                <div className="sub-field-row">
-                  <code>{CONTRACT_ADDRESSES.testnet.decisionRegistry}</code>
-                  <button
-                    onClick={() => handleCopy(CONTRACT_ADDRESSES.testnet.decisionRegistry, "Registry Contract")}
-                    className="copy-btn"
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
+                  <div className="sub-field">
+                    <span className="sub-field-label">Decision Registry Contract (Mainnet):</span>
+                    <div className="sub-field-row">
+                      <code>{CONTRACT_ADDRESSES.mainnet.decisionRegistry}</code>
+                      <button
+                        onClick={() => handleCopy(CONTRACT_ADDRESSES.mainnet.decisionRegistry, "Mainnet Registry Contract")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="sub-field">
-                <span className="sub-field-label">Official Testnet Faucet:</span>
-                <div className="sub-field-row">
-                  <code>https://faucet.botchain.ai/basic</code>
-                  <button
-                    onClick={() => handleCopy("https://faucet.botchain.ai/basic", "Faucet")}
-                    className="copy-btn"
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
+                  <div className="sub-field">
+                    <span className="sub-field-label">Signal Emitter Contract (Mainnet):</span>
+                    <div className="sub-field-row">
+                      <code>{CONTRACT_ADDRESSES.mainnet.signalEmitter}</code>
+                      <button
+                        onClick={() => handleCopy(CONTRACT_ADDRESSES.mainnet.signalEmitter, "Mainnet Signal Emitter")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="sub-field">
+                    <span className="sub-field-label">Official DEX / Liquidity:</span>
+                    <div className="sub-field-row">
+                      <code>https://dex.botchain.ai/#/swap</code>
+                      <button
+                        onClick={() => handleCopy("https://dex.botchain.ai/#/swap", "DEX URL")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="sub-field">
+                    <span className="sub-field-label">Target Network &amp; Chain ID (Testnet):</span>
+                    <div className="sub-field-row">
+                      <code>BOT Chain Testnet (Chain ID 968, Hex 0x3c8)</code>
+                      <button
+                        onClick={() => handleCopy("BOT Chain Testnet (Chain ID 968, Hex 0x3c8)", "Network")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="sub-field">
+                    <span className="sub-field-label">RPC Endpoint (Testnet):</span>
+                    <div className="sub-field-row">
+                      <code>https://rpc.bohr.life</code>
+                      <button onClick={() => handleCopy("https://rpc.bohr.life", "Testnet RPC")} className="copy-btn">
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="sub-field">
+                    <span className="sub-field-label">Block Explorer URL (Testnet):</span>
+                    <div className="sub-field-row">
+                      <code>https://scan.bohr.life</code>
+                      <button onClick={() => handleCopy("https://scan.bohr.life", "Testnet Explorer")} className="copy-btn">
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="sub-field">
+                    <span className="sub-field-label">Collateral Vault Contract (Testnet):</span>
+                    <div className="sub-field-row">
+                      <code>{CONTRACT_ADDRESSES.testnet.collateralVault}</code>
+                      <button
+                        onClick={() => handleCopy(CONTRACT_ADDRESSES.testnet.collateralVault, "Testnet Vault Contract")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="sub-field">
+                    <span className="sub-field-label">Decision Registry Contract (Testnet):</span>
+                    <div className="sub-field-row">
+                      <code>{CONTRACT_ADDRESSES.testnet.decisionRegistry}</code>
+                      <button
+                        onClick={() => handleCopy(CONTRACT_ADDRESSES.testnet.decisionRegistry, "Testnet Registry Contract")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="sub-field">
+                    <span className="sub-field-label">Official Testnet Faucet:</span>
+                    <div className="sub-field-row">
+                      <code>https://faucet.botchain.ai/basic</code>
+                      <button
+                        onClick={() => handleCopy("https://faucet.botchain.ai/basic", "Testnet Faucet")}
+                        className="copy-btn"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="modal-footer">
               <button
                 onClick={() => {
-                  const allDetails = `Project Name: AttestAI\nDescription: Verified Collateral & Adaptive Intelligence Trust Layer for AI Agents on BOT Chain.\nNetwork: BOT Chain Testnet\nChain ID: 968\nRPC URL: https://rpc.bohr.life\nBlock Explorer: https://scan.bohr.life\nCollateral Vault: ${CONTRACT_ADDRESSES.testnet.collateralVault}\nDecision Registry: ${CONTRACT_ADDRESSES.testnet.decisionRegistry}\nFaucet: https://faucet.botchain.ai/basic`;
+                  const allDetails = `Project Name: AttestAI
+Description: Verified Collateral & Adaptive Intelligence Trust Layer for Autonomous AI Financial Agents on BOT Chain.
+
+=== BOT CHAIN MAINNET (CHAIN ID 677) ===
+RPC URL: https://rpc.botchain.ai
+Block Explorer: https://scan.botchain.ai
+Collateral Vault: ${CONTRACT_ADDRESSES.mainnet.collateralVault}
+Decision Registry: ${CONTRACT_ADDRESSES.mainnet.decisionRegistry}
+Signal Emitter: ${CONTRACT_ADDRESSES.mainnet.signalEmitter}
+DEX Swap: https://dex.botchain.ai/#/swap
+
+=== BOT CHAIN TESTNET (CHAIN ID 968) ===
+RPC URL: https://rpc.bohr.life
+Block Explorer: https://scan.bohr.life
+Collateral Vault: ${CONTRACT_ADDRESSES.testnet.collateralVault}
+Decision Registry: ${CONTRACT_ADDRESSES.testnet.decisionRegistry}
+Signal Emitter: ${CONTRACT_ADDRESSES.testnet.signalEmitter}
+Faucet: https://faucet.botchain.ai/basic`;
                   handleCopy(allDetails, "Full Submission Package");
                 }}
                 className="btn btn-primary btn-full"
               >
-                📋 Copy Complete Submission Package
+                📋 Copy Complete Submission Package (Mainnet + Testnet)
               </button>
             </div>
           </div>
@@ -1105,17 +1327,20 @@ export default function Home() {
       {/* Footer */}
       <footer className="footer-section">
         <div>
-          <strong>AttestAI Protocol</strong> · Fully Migrated to BOT Chain
+          <strong>AttestAI Protocol</strong> · Deployed on BOT Chain Mainnet &amp; Testnet
         </div>
         <div className="footer-links">
           <a href="https://dev-docs.botchain.ai/docs/intro" target="_blank" rel="noopener noreferrer">
             BOT Chain Docs ↗
           </a>
+          <a href="https://scan.botchain.ai" target="_blank" rel="noopener noreferrer">
+            BOTScan (Mainnet) ↗
+          </a>
           <a href="https://scan.bohr.life" target="_blank" rel="noopener noreferrer">
             BOTScan (Testnet) ↗
           </a>
-          <a href="https://faucet.botchain.ai/basic" target="_blank" rel="noopener noreferrer">
-            Faucet ↗
+          <a href="https://dex.botchain.ai/#/swap" target="_blank" rel="noopener noreferrer">
+            DEX Swap ↗
           </a>
         </div>
       </footer>

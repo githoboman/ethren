@@ -3,8 +3,14 @@ import "@nomicfoundation/hardhat-ethers";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-const envPath = resolve(process.cwd(), "../../.env");
-if (existsSync(envPath)) {
+const envCandidates = [
+  resolve(__dirname, "../../.env"),
+  resolve(__dirname, "../.env"),
+  resolve(process.cwd(), ".env"),
+  resolve(process.cwd(), "../../.env"),
+];
+const envPath = envCandidates.find((p) => existsSync(p));
+if (envPath) {
   const content = readFileSync(envPath, "utf-8");
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
